@@ -1,15 +1,28 @@
-ipykernel
-langgraph
-langchain-groq
-mcp-use
+# Core FastAPI & Web Server
+fastapi
+uvicorn[standard]
+pydantic
 python-dotenv
-brightdata
+
+# LangChain & LangGraph Ecosystem
+langchain
+langchain-core
+langchain-groq
 langchain-google-genai
+langgraph
+
+# Model Context Protocol (MCP) & Bright Data
+mcp
+brightdata
+
+# Semantic Search & Vector Retriever
 faiss-cpu
 sentence-transformers
 numpy
-fastapi
-uvicorn
-pydantic
-mcp-client
-mcp
+
+# SSL Certificate & Networking
+certifi
+truststore
+
+# Notebook & Dev Tools
+ipykernel
