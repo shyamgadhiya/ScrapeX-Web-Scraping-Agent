@@ -1,0 +1,15 @@
+ipykernel
+langgraph
+langchain-groq
+mcp-use
+python-dotenv
+brightdata
+langchain-google-genai
+faiss-cpu
+sentence-transformers
+numpy
+fastapi
+uvicorn
+pydantic
+mcp-client
+mcp
