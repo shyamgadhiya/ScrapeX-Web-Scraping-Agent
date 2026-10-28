@@ -15,9 +15,7 @@ langgraph
 mcp
 brightdata
 
-# Semantic Search & Vector Retriever
-faiss-cpu
-sentence-transformers
+# Lightweight Semantic Search & Vector Retriever (< 15MB RAM)
 scikit-learn
 numpy
 

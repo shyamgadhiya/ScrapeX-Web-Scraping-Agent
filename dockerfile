@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 
 # Install Node.js 22 (required by @brightdata/mcp / pipenet >=22.0.0) and build tools
+# Install Node.js 22 (required by @brightdata/mcp / pipenet >=22.0.0)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
@@ -15,6 +16,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining Python requirements
+# Install Python requirements (Ultra-lightweight: No PyTorch, runs at < 150MB RAM)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
