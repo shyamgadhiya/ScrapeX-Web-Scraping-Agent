@@ -18,11 +18,9 @@ brightdata
 # Semantic Search & Vector Retriever
 faiss-cpu
 sentence-transformers
+scikit-learn
 numpy
 
 # SSL Certificate & Networking
 certifi
 truststore
-
-# Notebook & Dev Tools
-ipykernel
