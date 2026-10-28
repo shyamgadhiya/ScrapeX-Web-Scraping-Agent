@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Install Node.js 22 (required by @brightdata/mcp dependencies >=22.0.0) and build tools
+# Install Node.js 22 (required by @brightdata/mcp / pipenet >=22.0.0) and build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
@@ -11,14 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Step 1: Pre-install CPU-only PyTorch to avoid downloading 3GB+ of CUDA libraries (saves ~500MB RAM)
+# Pre-install CPU-only PyTorch (avoids 3GB+ CUDA wheels, cuts RAM by ~500MB)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-# Step 2: Install remaining Python requirements
+# Install remaining Python requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Step 3: Pre-cache Bright Data MCP package cleanly during build
+# Pre-cache Bright Data MCP package cleanly during build
 RUN API_TOKEN=build_cache npx -y @brightdata/mcp --help > /dev/null 2>&1 || true
 
 # Copy application source code

@@ -16,6 +16,7 @@ except Exception:
     pass
 
 import json
+import asyncio
 import logging
 import datetime
 from contextlib import asynccontextmanager
@@ -59,6 +60,7 @@ class MCPNotificationFilter(logging.Filter):
 # Apply the filter to the root and mcp loggers
 logging.getLogger().addFilter(MCPNotificationFilter())
 logging.getLogger("mcp").addFilter(MCPNotificationFilter())
+
 # ---------------------------------------------------------------------------
 # Global Application State Container
 # ---------------------------------------------------------------------------
@@ -69,32 +71,44 @@ class AppState:
 state = AppState()
 
 # ---------------------------------------------------------------------------
-# Lifespan: Server Startup & Shutdown
+# Background Resource Initialization
 # ---------------------------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def init_background_resources():
     """
-    Manages long-lived resources. MCP server is booted once, and tools
-    are indexed into FAISS on startup. Gracefully shut down on exit.
+    Connects to Bright Data MCP and builds the semantic tool index.
+    Runs asynchronously in the background so Uvicorn opens the listening
+    port immediately (< 1s), preventing cloud port-detection timeouts.
     """
-    logger.info("Initializing Bright Data MCP Manager...")
+    logger.info("Initializing Bright Data MCP Manager in background...")
     state.mcp_manager = BrightDataMCPManager()
     
     try:
         all_tools = await state.mcp_manager.connect_and_get_all_tools()
         logger.info(f"Loaded {len(all_tools)} tools from MCP server.")
 
-        logger.info("Building FAISS semantic index for tools...")
+        logger.info("Building semantic index for tools...")
         state.retriever = SemanticToolRetriever()
         state.retriever.index_tools(all_tools)
-        logger.info("Semantic tool index is ready.")
+        logger.info("Semantic tool index is ready and active.")
     except Exception as e:
         logger.critical(f"Failed to initialize MCP or Tool Index: {e}", exc_info=True)
-        raise e
 
-    yield  # Application serves requests here
+# ---------------------------------------------------------------------------
+# Lifespan: Server Startup & Shutdown
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manages long-lived resources. Launches background initialization so
+    HTTP port is bound and active immediately upon container launch.
+    """
+    init_task = asyncio.create_task(init_background_resources())
+
+    yield  # Port is open immediately!
 
     logger.info("Shutting down Bright Data MCP connection...")
+    if not init_task.done():
+        init_task.cancel()
     if state.mcp_manager:
         await state.mcp_manager.close()
     logger.info("Shutdown complete.")
@@ -138,8 +152,11 @@ class ScrapeResponse(BaseModel):
 # Agent Factory Helper
 # ---------------------------------------------------------------------------
 def build_request_agent(query: str, top_k: int, temperature: float):
-    if not state.retriever:
-        raise HTTPException(status_code=503, detail="Tool retriever is not initialized.")
+    if not state.retriever or not state.retriever.tools:
+        raise HTTPException(
+            status_code=503, 
+            detail="Tool retriever is still initializing MCP tools. Please retry in a few seconds."
+        )
 
     selected_tools = state.retriever.get_relevant_tools(query, top_k=top_k)
     current_date = datetime.datetime.now().strftime("%B %d, %Y")
@@ -204,9 +221,10 @@ def extract_text_content(content: Any) -> str:
 # ---------------------------------------------------------------------------
 @app.get("/health", tags=["System"])
 async def health_check():
-    """Health probe for container orchestrators (Docker, Kubernetes)."""
+    """Health probe for container orchestrators (Render, Docker, Kubernetes)."""
+    is_ready = state.retriever is not None and len(state.retriever.tools) > 0
     return {
-        "status": "healthy",
+        "status": "healthy" if is_ready else "initializing",
         "mcp_connected": state.mcp_manager is not None and state.mcp_manager.session is not None,
         "indexed_tools": len(state.retriever.tools) if state.retriever else 0
     }
@@ -221,9 +239,7 @@ async def execute_scrape(request: ScrapeRequest):
         response = await agent.ainvoke({"messages": [("human", request.query)]})
         raw_content = response["messages"][-1].content
         
-        # FIX: Normalize list/blocks into a clean string
         final_message = extract_text_content(raw_content)
-        
         duration = (datetime.datetime.now() - start_time).total_seconds()
 
         return ScrapeResponse(
@@ -298,5 +314,5 @@ async def stream_scrape(request: ScrapeRequest):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    # Use 1 worker to keep MCP stdio pipes in the parent process
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
