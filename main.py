@@ -16,13 +16,15 @@ except Exception:
     pass
 
 import json
+import time
 import asyncio
 import logging
 import datetime
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -134,10 +136,49 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# In-Memory Rate Limiter (Sliding Window per Client IP)
+# ---------------------------------------------------------------------------
+class InMemoryRateLimiter:
+    """Sliding-window in-memory rate limiter per client IP address."""
+    def __init__(self, requests_per_minute: int = 10):
+        self.rate_limit = requests_per_minute
+        self.window = 60.0  # seconds
+        self.history: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, ip: str) -> bool:
+        now = time.time()
+        # Evict timestamps outside the active sliding window
+        valid = [t for t in self.history[ip] if now - t < self.window]
+        if len(valid) >= self.rate_limit:
+            self.history[ip] = valid
+            return False
+        valid.append(now)
+        self.history[ip] = valid
+        return True
+
+rate_limiter = InMemoryRateLimiter(requests_per_minute=10)
+
+async def check_rate_limit(request: Request):
+    """Enforces rate limit using client IP or X-Forwarded-For header."""
+    forwarded = request.headers.get("x-forwarded-for")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+    if not rate_limiter.check(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. You can make at most 10 requests per minute. Please wait before retrying."
+        )
+
+# ---------------------------------------------------------------------------
 # Request & Response Schemas
 # ---------------------------------------------------------------------------
 class ScrapeRequest(BaseModel):
-    query: str = Field(..., json_schema_extra={"example": "Find top rated noise cancelling headphones on Amazon and compare prices"})
+    query: str = Field(
+        ...,
+        min_length=3,
+        max_length=1500,
+        description="Search or scraping query (3 to 1500 characters)",
+        json_schema_extra={"example": "Find top rated noise cancelling headphones on Amazon and compare prices"}
+    )
     top_k_tools: int = Field(default=3, ge=1, le=6, description="Number of semantic tools to retrieve")
     temperature: float = Field(default=0.1, ge=0.0, le=1.0)
 
@@ -230,7 +271,7 @@ async def health_check():
     }
 
 
-@app.post("/api/scrape", response_model=ScrapeResponse, tags=["Scraping"])
+@app.post("/api/scrape", response_model=ScrapeResponse, dependencies=[Depends(check_rate_limit)], tags=["Scraping"])
 async def execute_scrape(request: ScrapeRequest):
     start_time = datetime.datetime.now()
     agent, selected_tools = build_request_agent(request.query, request.top_k_tools, request.temperature)
@@ -255,7 +296,7 @@ async def execute_scrape(request: ScrapeRequest):
             detail=f"Agent execution failed: {str(e)}"
         )
 
-@app.post("/api/scrape/stream", tags=["Scraping"])
+@app.post("/api/scrape/stream", dependencies=[Depends(check_rate_limit)], tags=["Scraping"])
 async def stream_scrape(request: ScrapeRequest):
     """
     Server-Sent Events (SSE) streaming endpoint.
